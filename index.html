@@ -14,8 +14,8 @@
   // 1. Go to supabase.com → New Project
   // 2. Settings → API → copy Project URL and anon/public key
   // 3. Paste them below
-  const SUPABASE_URL  = 'YOUR_SUPABASE_URL';   // e.g. https://xxxx.supabase.co
-  const SUPABASE_KEY  = 'YOUR_SUPABASE_ANON_KEY';
+  const SUPABASE_URL  = 'https://sgnjvzkjpxmeljadqpix.supabase.co';
+  const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnbmp2emtqcHhtZWxqYWRxcGl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMDkzNjQsImV4cCI6MjA5NjY4NTM2NH0.yLvwJx-MkYIF_iF6FbxiRfLSryQTn38HY4bpxU1sSus';
   // ──────────────────────────────────────────────────────────────────────────
   // SQL to run once in Supabase → SQL Editor:
   //
@@ -1056,12 +1056,4 @@ function App(){
       {page==='catalog'&&<CatalogPage products={products} setPage={setPage} setSelectedProduct={setSelected} addToCart={addToCart}/>}
       {page==='product'&&<ProductPage product={selected} addToCart={addToCart} setPage={setPage}/>}
       {page==='checkout'&&<CheckoutPage cart={cart} setCart={setCart} setPage={setPage}/>}
-      {page==='admin'&&<AdminPage products={products} setProducts={setProducts}/>}
-    </div>
-  );
-}
-
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
-</script>
-</body>
-</html>
+      {page==='admin'&&
