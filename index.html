@@ -125,12 +125,180 @@ select option{background:#fff}
 
 /* Divider */
 .divider{border:none;border-top:1.5px solid #e8e6e1}
+
+/* 3D viewer */
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
+<script>
+/* Bridge so React can await the ES-module viewer */
+window._jersey3DReady = new Promise(function(res){ window._jersey3DResolve = res; });
+</script>
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.158.0';
+import { OrbitControls } from 'https://esm.sh/three@0.158.0/examples/jsm/controls/OrbitControls';
+import { GLTFLoader }    from 'https://esm.sh/three@0.158.0/examples/jsm/loaders/GLTFLoader';
+
+/* Draw name + number texture onto the back face canvas */
+function drawBack(cv, hex, name, num) {
+  const [w,h] = [cv.width, cv.height];
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0,0,w,h);
+  // Base color
+  ctx.fillStyle = hex || '#888';
+  ctx.fillRect(0,0,w,h);
+  // Subtle fabric lines
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let y=0; y<h; y+=10) ctx.fillRect(0,y,w,5);
+  // Text contrast
+  const hx = (hex||'#888888').replace('#','');
+  const lum = (0.299*parseInt(hx.slice(0,2),16) + 0.587*parseInt(hx.slice(2,4),16) + 0.114*parseInt(hx.slice(4,6),16)) / 255;
+  const tc = lum < 0.5 ? '#ffffff' : '#111111';
+  ctx.fillStyle = tc;
+  ctx.textAlign = 'center';
+  if (name) {
+    ctx.shadowColor = lum<0.5 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
+    ctx.shadowBlur = 10;
+    ctx.font = 'bold 78px "Arial Black",Arial,sans-serif';
+    ctx.fillText(name.slice(0,10).toUpperCase(), w/2, 190);
+    ctx.shadowBlur = 0;
+  }
+  if (num) {
+    ctx.shadowColor = lum<0.5 ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
+    ctx.shadowBlur = 15;
+    ctx.font = 'bold 240px "Arial Black",Arial,sans-serif';
+    ctx.fillText(String(num).slice(0,2), w/2, 462);
+    ctx.shadowBlur = 0;
+  }
+  if (!name && !num) {
+    ctx.fillStyle = lum<0.5 ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)';
+    ctx.font = 'bold 48px "Arial Black",Arial,sans-serif';
+    ctx.fillText('BACK', w/2, 270);
+  }
+}
+
+/* Build a fallback jersey shape using Three.js primitives */
+function makeJersey(cMat, bMat) {
+  const g = new THREE.Group();
+  // Body — BoxGeometry face order: +x,-x,+y,-y, +z(front), -z(back)
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(2.1,2.7,0.42),
+    [cMat,cMat,cMat,cMat,cMat,bMat]));
+  // Sleeves [x, y, rotZ]
+  [[-1.53,1.07, 0.42],[1.53,1.07,-0.42]].forEach(([x,y,rz])=>{
+    const sl = new THREE.Mesh(new THREE.BoxGeometry(0.95,0.55,0.33), cMat);
+    sl.position.set(x,y,0); sl.rotation.z = rz; g.add(sl);
+  });
+  // Collar
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.3,0.09,8,24,Math.PI*1.35), cMat);
+  collar.position.set(0,1.45,0.16); collar.rotation.x = -0.18; g.add(collar);
+  return g;
+}
+
+/* Main initializer — called by the React component */
+function initJerseyViewer(container, hex0, name0, num0) {
+  const W = container.clientWidth  || 500;
+  const H = container.clientHeight || 420;
+
+  // Scene + camera
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x141428);
+  const cam = new THREE.PerspectiveCamera(40, W/H, 0.1, 80);
+  cam.position.set(0, 0.3, 6.5);
+
+  // Renderer
+  const ren = new THREE.WebGLRenderer({ antialias: true });
+  ren.setSize(W,H);
+  ren.setPixelRatio(Math.min(devicePixelRatio,2));
+  ren.shadowMap.enabled = true;
+  ren.shadowMap.type = THREE.PCFSoftShadowMap;
+  try { ren.outputColorSpace = THREE.SRGBColorSpace; } catch(e) {}
+  container.appendChild(ren.domElement);
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0xd0d8ff, 0.65));
+  const kl = new THREE.DirectionalLight(0xffffff,1.3);
+  kl.position.set(4,8,6); kl.castShadow = true; scene.add(kl);
+  const fl = new THREE.DirectionalLight(0x6688ff,0.35);
+  fl.position.set(-5,2,-3); scene.add(fl);
+  const rl = new THREE.DirectionalLight(0xffffff,0.45);
+  rl.position.set(0,-4,-4); scene.add(rl);
+
+  // Ground
+  const gnd = new THREE.Mesh(new THREE.PlaneGeometry(20,20),
+    new THREE.MeshStandardMaterial({color:0x1a1a38,roughness:1}));
+  gnd.rotation.x = -Math.PI/2; gnd.position.y = -1.55;
+  gnd.receiveShadow = true; scene.add(gnd);
+
+  // Orbit controls with auto-rotate
+  const ctrl = new OrbitControls(cam, ren.domElement);
+  ctrl.enableDamping = true; ctrl.dampingFactor = 0.065;
+  ctrl.minDistance = 3.5; ctrl.maxDistance = 13;
+  ctrl.enablePan = false; ctrl.autoRotate = true; ctrl.autoRotateSpeed = 1.4;
+  let arTimer;
+  ctrl.addEventListener('start', ()=>{ clearTimeout(arTimer); ctrl.autoRotate = false; });
+  ctrl.addEventListener('end',   ()=>{ arTimer = setTimeout(()=> ctrl.autoRotate = true, 2500); });
+
+  // Jersey materials
+  let _hex = hex0||'#888888', _name = name0||'', _num = num0||'';
+  const cMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(_hex), roughness:0.82, metalness:0.04 });
+  const bCv  = document.createElement('canvas'); bCv.width = bCv.height = 512;
+  drawBack(bCv, _hex, _name, _num);
+  const bTex = new THREE.CanvasTexture(bCv);
+  const bMat = new THREE.MeshStandardMaterial({ map: bTex, roughness:0.82, metalness:0.04 });
+
+  // Fallback jersey (replaced if GLB loads)
+  let jGroup = makeJersey(cMat, bMat); scene.add(jGroup);
+
+  // Try loading a real GLB — place football_jersey.glb in the repo root
+  new GLTFLoader().load('football_jersey.glb',
+    gltf => {
+      const mdl = gltf.scene;
+      mdl.traverse(c => { if (c.isMesh) { c.material = cMat; c.castShadow = true; } });
+      const box = new THREE.Box3().setFromObject(mdl);
+      const sz  = new THREE.Vector3(); box.getSize(sz);
+      const sc  = 3.2 / Math.max(sz.x, sz.y, sz.z); mdl.scale.setScalar(sc);
+      const ctr = new THREE.Vector3(); box.getCenter(ctr); mdl.position.copy(ctr.multiplyScalar(-sc));
+      scene.remove(jGroup); jGroup = mdl; scene.add(jGroup);
+    },
+    undefined,
+    () => { /* GLB not found — keep fallback */ }
+  );
+
+  // Responsive resize
+  const obs = new ResizeObserver(()=>{
+    const w = container.clientWidth, h = container.clientHeight||420;
+    cam.aspect = w/h; cam.updateProjectionMatrix(); ren.setSize(w,h);
+  });
+  obs.observe(container);
+
+  // Render loop
+  let raf;
+  (function loop(){ raf = requestAnimationFrame(loop); ctrl.update(); ren.render(scene,cam); })();
+
+  // Public API
+  return {
+    setColor(hex) {
+      _hex = hex; cMat.color.set(hex);
+      drawBack(bCv,hex,_name,_num); bTex.needsUpdate = true;
+    },
+    setText(name, num) {
+      _name = name||''; _num = num||'';
+      drawBack(bCv,_hex,_name,_num); bTex.needsUpdate = true;
+    },
+    dispose() {
+      clearTimeout(arTimer); cancelAnimationFrame(raf);
+      obs.disconnect(); ctrl.dispose(); ren.dispose();
+      if (container.contains(ren.domElement)) container.removeChild(ren.domElement);
+    }
+  };
+}
+
+window._jersey3DResolve(initJerseyViewer);
+</script>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useCallback, useRef } = React;
+const { useState, useCallback, useRef, useEffect } = React;
 
 /* ─── IMAGE BANK ─────────────────────────────────────────────────── */
 /* Real Unsplash sport/jersey photos – onerror falls back to colored bg */
@@ -456,9 +624,61 @@ function ChipRow({label,opts,val,set}){
   );
 }
 
+/* ─── 3D JERSEY VIEWER ───────────────────────────────────────────── */
+function JerseyViewer3D({color,name,number}){
+  const containerRef = React.useRef(null);
+  const viewerRef    = React.useRef(null);
+  const [loading,setLoading] = useState(true);
+
+  // Mount: init viewer (once)
+  useEffect(()=>{
+    let alive = true;
+    const el = containerRef.current;
+    if(!el) return;
+    window._jersey3DReady.then(initViewer=>{
+      if(!alive) return;
+      viewerRef.current = initViewer(el, color, name, number);
+      setLoading(false);
+    });
+    return ()=>{
+      alive = false;
+      viewerRef.current?.dispose();
+      viewerRef.current = null;
+    };
+  }, []); // eslint-disable-line
+
+  // Color change
+  useEffect(()=>{
+    if(viewerRef.current) viewerRef.current.setColor(color);
+  },[color]);
+
+  // Name / number change
+  useEffect(()=>{
+    if(viewerRef.current) viewerRef.current.setText(name, number);
+  },[name,number]);
+
+  return(
+    <div style={{height:'430px',background:'#141428',borderRadius:'4px',overflow:'hidden',position:'relative'}}>
+      <div ref={containerRef} style={{width:'100%',height:'100%'}}/>
+      {loading&&(
+        <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px',color:'rgba(255,255,255,0.5)',fontSize:'13px',pointerEvents:'none'}}>
+          <div style={{width:'30px',height:'30px',border:'3px solid rgba(255,255,255,0.15)',borderTopColor:'rgba(255,255,255,0.75)',borderRadius:'50%',animation:'spin 0.75s linear infinite'}}/>
+          טוען תצוגה תלת-ממדית...
+        </div>
+      )}
+      {!loading&&(
+        <div style={{position:'absolute',bottom:'8px',left:0,right:0,textAlign:'center',color:'rgba(255,255,255,0.32)',fontSize:'11px',pointerEvents:'none'}}>
+          גרור לסיבוב &nbsp;·&nbsp; גלגל לזום
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── PRODUCT DETAIL ─────────────────────────────────────────────── */
 function ProductPage({product,addToCart,setPage}){
   const [imgError,setImgError]=useState(false);
+  const [view3D,setView3D]=useState(false);
   const [size,setSize]=useState('L');
   const [name,setName]=useState('');
   const [num,setNum]=useState('');
@@ -481,21 +701,39 @@ function ProductPage({product,addToCart,setPage}){
       <button onClick={()=>setPage('catalog')} className="text-sm text-mid hover:text-ink transition-colors mb-8 flex items-center gap-1">← חזרה לחנות</button>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-10 lg:gap-16">
-        {/* Image */}
+        {/* Image / 3D */}
         <div className="space-y-3">
-          <div className="overflow-hidden bg-smoke" style={{aspectRatio:'4/5',background:imgError?product.color:'#eee'}}>
-            {!imgError&&(
-              <img src={product.img} alt={product.name} className="w-full h-full object-cover"
-                onError={()=>setImgError(true)}/>
-            )}
+          {/* View toggle */}
+          <div className="flex gap-2">
+            <button onClick={()=>setView3D(false)}
+              className={`flex-1 py-2 text-xs font-bold rounded border transition-all ${!view3D?'bg-ink text-paper border-ink':'bg-white text-mid border-smoke hover:border-ink'}`}>
+              📷 תמונה
+            </button>
+            <button onClick={()=>setView3D(true)}
+              className={`flex-1 py-2 text-xs font-bold rounded border transition-all ${view3D?'bg-ink text-paper border-ink':'bg-white text-mid border-smoke hover:border-ink'}`}>
+              🔄 תצוגה 3D
+            </button>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            {[0,1,2].map(i=>(
-              <div key={i} className="overflow-hidden cursor-pointer" style={{aspectRatio:'1',background:'#eee'}}>
-                {!imgError&&<img src={product.img} alt="" className="w-full h-full object-cover opacity-70 hover:opacity-100 transition-opacity"/>}
+
+          {view3D?(
+            <JerseyViewer3D color={product.color} name={name} number={num}/>
+          ):(
+            <>
+              <div className="overflow-hidden bg-smoke" style={{aspectRatio:'4/5',background:imgError?product.color:'#eee'}}>
+                {!imgError&&(
+                  <img src={product.img} alt={product.name} className="w-full h-full object-cover"
+                    onError={()=>setImgError(true)}/>
+                )}
               </div>
-            ))}
-          </div>
+              <div className="grid grid-cols-3 gap-3">
+                {[0,1,2].map(i=>(
+                  <div key={i} className="overflow-hidden cursor-pointer" style={{aspectRatio:'1',background:'#eee'}}>
+                    {!imgError&&<img src={product.img} alt="" className="w-full h-full object-cover opacity-70 hover:opacity-100 transition-opacity"/>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Details */}
@@ -885,175 +1123,4 @@ function AdminPage({products,setProducts}){
                           {o.notes&&<p className="text-mid text-xs italic mt-1">"{o.notes}"</p>}
                         </div>
                         <div>
-                          <p className="font-bold text-ink mb-1">פריטים</p>
-                          {(o.items||[]).map((it,i)=>(
-                            <p key={i} className="text-xs text-mid">{it.name} × {it.qty} (מידה {it.size}) — ₪{it.price*it.qty}</p>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <p className="text-xs text-mid self-center ml-2">שנה סטטוס:</p>
-                        {['ממתין לאישור','אושר','נשלח','בוטל'].map(s=>(
-                          <button key={s} onClick={()=>updateStatus(o.id,s)}
-                            className={`rounded px-3 py-1.5 text-xs font-bold border transition-all ${o.status===s?'bg-ink text-paper border-ink':'border-smoke text-mid hover:border-ink'}`}>
-                            {s}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── PRODUCTS TAB ───────────────────────────────────────── */}
-      {tab==='products'&&view==='list'&&(
-        <>
-          {/* Stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            {[
-              ['מוצרים','📦',products.length],
-              ['במלאי','🟢',products.reduce((s,p)=>s+p.stock,0)],
-              ['הנמכרות','🔥',products.filter(p=>p.badgeType==='hot').length],
-              ['רטרו','🕰️',products.filter(p=>p.badgeType==='retro').length],
-            ].map(([l,e,v])=>(
-              <div key={l} className="bg-white border border-smoke rounded p-4 text-right">
-                <div className="text-2xl mb-2">{e}</div>
-                <div className="display text-2xl font-black text-ink">{v}</div>
-                <div className="text-xs text-mid mt-0.5">{l}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white border border-smoke rounded overflow-x-auto">
-            <table className="w-full text-sm min-w-[680px]">
-              <thead>
-                <tr className="border-b border-smoke text-right">
-                  {['מוצר','קבוצה','מחיר','מלאי','תג','פעולות'].map(h=>(
-                    <th key={h} className="px-5 py-3.5 text-xs font-black uppercase tracking-widest text-mid text-right">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {products.map(p=>(
-                  <tr key={p.id} className="border-b border-smoke hover:bg-paper transition-colors">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3 flex-row-reverse justify-end">
-                        <div className="w-10 h-10 overflow-hidden bg-smoke flex-shrink-0">
-                          <img src={p.img} alt="" className="w-full h-full object-cover" onError={e=>e.target.style.display='none'}/>
-                        </div>
-                        <span className="font-bold text-ink text-xs max-w-[160px] truncate">{p.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-mid text-xs">{p.team}</td>
-                    <td className="px-5 py-3 font-black text-ink">₪{p.price}</td>
-                    <td className="px-5 py-3">
-                      <span className={`font-bold text-sm ${p.stock<=5?'text-red':'text-ink'}`}>{p.stock}</span>
-                    </td>
-                    <td className="px-5 py-3"><Badge type={p.badgeType} label={p.badge}/></td>
-                    <td className="px-5 py-3">
-                      <div className="flex gap-2">
-                        <button onClick={()=>openEdit(p)} className="btn-outline rounded px-3 py-1.5 text-xs">ערוך</button>
-                        <button onClick={()=>del(p.id)} className="rounded px-3 py-1.5 text-xs border border-red/30 text-red hover:bg-red/5 transition-colors">מחק</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {tab==='products'&&view==='edit'&&(
-        <div className="bg-white border border-smoke rounded p-6 max-w-xl mr-auto">
-          <h2 className="font-black text-ink text-xl mb-6">{editId?'עריכת מוצר':'מוצר חדש'}</h2>
-          <div className="grid grid-cols-2 gap-4">
-            {[['name','שם המוצר'],['team','קבוצה'],['league','ליגה'],['era','עונה'],['price','מחיר ₪'],['stock','מלאי']].map(([k,l])=>(
-              <div key={k} className={k==='name'?'col-span-2':''}>
-                <label className="text-xs text-mid mb-1 block">{l}</label>
-                <input value={form[k]||''} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} className="px-3 py-2.5 text-sm rounded"/>
-              </div>
-            ))}
-            <div>
-              <label className="text-xs text-mid mb-1 block">תג</label>
-              <select value={form.badge||''} onChange={e=>setForm(f=>({...f,badge:e.target.value,badgeType:BADGE_MAP[e.target.value]}))}
-                className="px-3 py-2.5 text-sm rounded">
-                <option value="">ללא</option>
-                <option>הכי נמכר</option><option>רטרו</option><option>חדש</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-mid mb-1 block">צבע</label>
-              <div className="flex gap-2 items-center">
-                <input type="color" value={form.color||'#111'} onChange={e=>setForm(f=>({...f,color:e.target.value}))}
-                  className="w-10 h-10 rounded cursor-pointer border-0 p-0 flex-shrink-0"/>
-                <input value={form.color||''} onChange={e=>setForm(f=>({...f,color:e.target.value}))} className="px-3 py-2.5 text-sm rounded font-mono"/>
-              </div>
-            </div>
-            <div className="col-span-2">
-              <label className="text-xs text-mid mb-1 block">קישור תמונה (URL)</label>
-              <input value={form.img||''} onChange={e=>setForm(f=>({...f,img:e.target.value}))}
-                placeholder="https://..." className="px-3 py-2.5 text-sm rounded font-mono"/>
-            </div>
-            <div className="col-span-2">
-              <label className="text-xs text-mid mb-1 block">תיאור</label>
-              <textarea rows={3} value={form.description||''} onChange={e=>setForm(f=>({...f,description:e.target.value}))}
-                className="px-3 py-2.5 text-sm rounded resize-none"/>
-            </div>
-          </div>
-
-          {/* Preview */}
-          {form.img&&(
-            <div className="mt-5 border border-smoke rounded overflow-hidden flex gap-4 p-3">
-              <div className="w-16 h-16 overflow-hidden bg-smoke flex-shrink-0">
-                <img src={form.img} alt="" className="w-full h-full object-cover" onError={e=>e.target.style.display='none'}/>
-              </div>
-              <div className="text-right">
-                <p className="font-bold text-ink text-sm">{form.name||'שם המוצר'}</p>
-                <p className="text-mid text-xs">{form.team}</p>
-                <p className="font-black text-ink mt-1">₪{form.price||'0'}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="flex gap-3 mt-6">
-            <button onClick={save} className="btn-dark rounded px-6 py-3 font-bold text-sm">שמור</button>
-            <button onClick={()=>setView('list')} className="btn-outline rounded px-5 py-3 text-sm">ביטול</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── APP ────────────────────────────────────────────────────────── */
-function App(){
-  const [page,setPage]=useState('home');
-  const [products,setProducts]=useState(PRODUCTS);
-  const [selected,setSelected]=useState(null);
-  const [cart,setCart]=useState([]);
-  const [cartOpen,setCartOpen]=useState(false);
-
-  const addToCart=useCallback((product,size,customName,customNum)=>{
-    setCart(c=>{
-      const ex=c.find(i=>i.id===product.id&&i.size===size&&i.customName===customName&&i.customNum===customNum);
-      if(ex) return c.map(i=>i.cid===ex.cid?{...i,qty:i.qty+1}:i);
-      return [...c,{...product,size,customName,customNum,qty:1,cid:Date.now()+Math.random()}];
-    });
-  },[]);
-
-  const cartCount=cart.reduce((s,i)=>s+i.qty,0);
-
-  return(
-    <div className="min-h-screen" style={{background:'#f5f3ef'}}>
-      <Navbar page={page} setPage={setPage} cartCount={cartCount} setCartOpen={setCartOpen}/>
-      <CartDrawer cart={cart} setCart={setCart} open={cartOpen} setOpen={setCartOpen} setPage={setPage}/>
-      {page==='home'&&<HomePage setPage={setPage} setSelectedProduct={setSelected} addToCart={addToCart} products={products}/>}
-      {page==='catalog'&&<CatalogPage products={products} setPage={setPage} setSelectedProduct={setSelected} addToCart={addToCart}/>}
-      {page==='product'&&<ProductPage product={selected} addToCart={addToCart} setPage={setPage}/>}
-      {page==='checkout'&&<CheckoutPage cart={cart} setCart={setCart} setPage={setPage}/>}
-      {page==='admin'&&
+                       
